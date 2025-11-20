@@ -1,0 +1,61 @@
+# Конфигурация SwiftLint для студентов
+# Можете изменить правила под свои нужды
+
+# Отключенные правила (можно добавить свои)
+disabled_rules:
+  - trailing_whitespace  # пробелы в конце строк
+
+# Включенные опциональные правила
+opt_in_rules:
+  - empty_count  # используйте isEmpty вместо count == 0
+  - missing_docs  # требование документации для публичных API
+
+# Максимальная длина строки
+line_length:
+  warning: 120
+  error: 150
+  ignores_urls: true
+  ignores_comments: true
+
+# Длина файла
+file_length:
+  warning: 500
+  error: 1000
+
+# Длина функции
+function_body_length:
+  warning: 50
+  error: 100
+
+# Длина типа (класс, struct)
+type_body_length:
+  warning: 300
+  error: 500
+
+# Сложность функции (cyclomatic complexity)
+cyclomatic_complexity:
+  warning: 10
+  error: 20
+
+# Количество вложенных типов
+nesting:
+  type_level:
+    warning: 2
+  statement_level:
+    warning: 5
+
+# Исключенные директории
+excluded:
+  - Pods
+  - .build
+  - DerivedData
+  - Carthage
+  - vendor
+
+# Включенные директории (где искать Swift файлы)
+included:
+  - Sources
+  - Tests
+
+# Форматирование для отчетов
+reporter: "json"  # используется в GitHub Actions

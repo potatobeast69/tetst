@@ -1,0 +1,27 @@
+# Swift
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+*.xcuserstate
+Package.resolved
+
+# Reports
+reports/
+
+# Binaries
+bin/
+
+# macOS
+.DS_Store
+
+# IDE
+*.swp
+*~
+.vscode/
+.idea/
+
+# Dependencies
+Packages/
+.build-artifacts/

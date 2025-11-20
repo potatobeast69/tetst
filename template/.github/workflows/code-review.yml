@@ -1,0 +1,384 @@
+name: 🔍 Code Review & Build Check
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  # Job 1: Проверка компиляции
+  build-check:
+    name: 🔨 Проверка компиляции
+    runs-on: macos-latest
+    timeout-minutes: 20
+    outputs:
+      build-status: ${{ steps.build.outcome }}
+
+    steps:
+      - name: 📥 Checkout кода
+        uses: actions/checkout@v4
+
+      - name: 💾 Кеш SPM зависимостей
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: 📋 Информация о среде
+        run: |
+          echo "Xcode: $(xcodebuild -version)"
+          echo "Swift: $(swift --version)"
+          echo "macOS: $(sw_vers -productVersion)"
+
+      - name: 🔨 Сборка проекта
+        id: build
+        continue-on-error: true
+        run: |
+          if [ -f "Package.swift" ]; then
+            echo "📦 Swift Package обнаружен"
+            swift build
+          elif ls *.xcworkspace 1> /dev/null 2>&1; then
+            WORKSPACE=$(ls *.xcworkspace | head -n 1)
+            SCHEME=$(xcodebuild -workspace "$WORKSPACE" -list | grep -A 1 "Schemes:" | tail -n 1 | xargs)
+            echo "🔨 Собираю workspace: $WORKSPACE, схема: $SCHEME"
+            xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
+              -destination "platform=iOS Simulator,name=iPhone 16" \
+              -configuration Debug clean build
+          elif ls *.xcodeproj 1> /dev/null 2>&1; then
+            PROJECT=$(ls *.xcodeproj | head -n 1)
+            SCHEME=$(xcodebuild -project "$PROJECT" -list | grep -A 1 "Schemes:" | tail -n 1 | xargs)
+            echo "🔨 Собираю проект: $PROJECT, схема: $SCHEME"
+            xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
+              -destination "platform=iOS Simulator,name=iPhone 16" \
+              -configuration Debug clean build
+          else
+            echo "❌ Swift проект не найден"
+            exit 1
+          fi
+
+      - name: 📊 Результат сборки
+        run: |
+          if [ "${{ steps.build.outcome }}" == "success" ]; then
+            echo "✅ Проект успешно скомпилирован!"
+          else
+            echo "❌ Ошибка компиляции!"
+            exit 1
+          fi
+
+  # Job 2: Клонирование Code Review Tools
+  setup-tools:
+    name: 🛠️ Подготовка инструментов
+    runs-on: macos-latest
+
+    steps:
+      - name: 📥 Клонирование Code Review Tools
+        run: |
+          git clone https://github.com/${{ github.repository_owner }}/SwiftCodeReviewTools.git tools
+          cd tools
+          echo "✅ Инструменты клонированы"
+
+      - name: 🔨 Сборка Code Review Tools
+        run: |
+          cd tools
+          swift build -c release
+          echo "✅ Инструменты собраны"
+
+      - name: 💾 Сохранение собранных инструментов
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-review-tools
+          path: tools/.build/release/
+          retention-days: 1
+
+  # Job 3: Проверка стиля кода (SwiftLint)
+  style-check:
+    name: 🎨 Проверка стиля кода
+    needs: setup-tools
+    runs-on: macos-latest
+
+    steps:
+      - name: 📥 Checkout кода
+        uses: actions/checkout@v4
+
+      - name: 📥 Загрузка инструментов
+        uses: actions/download-artifact@v4
+        with:
+          name: code-review-tools
+          path: tools
+
+      - name: 🔧 Установка SwiftLint
+        run: |
+          brew install swiftlint
+          echo "SwiftLint версия: $(swiftlint version)"
+
+      - name: 🎨 Запуск проверки стиля
+        id: style-check
+        continue-on-error: true
+        run: |
+          chmod +x tools/swift-style-check
+          tools/swift-style-check . --format json --output style-report.json || true
+
+      - name: 📊 Результаты проверки стиля
+        if: always()
+        run: |
+          if [ -f "style-report.json" ]; then
+            echo "📄 Отчет создан"
+            cat style-report.json | jq '.summary'
+
+            # Подсчет проблем
+            ERRORS=$(cat style-report.json | jq '.summary.errors')
+            WARNINGS=$(cat style-report.json | jq '.summary.warnings')
+
+            echo "❌ Ошибок: $ERRORS"
+            echo "⚠️  Предупреждений: $WARNINGS"
+
+            # Сохраняем для отправки на backend
+            echo "STYLE_ERRORS=$ERRORS" >> $GITHUB_ENV
+            echo "STYLE_WARNINGS=$WARNINGS" >> $GITHUB_ENV
+          else
+            echo "⚠️ Отчет не создан"
+          fi
+
+      - name: 💾 Сохранение отчета
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: style-report
+          path: style-report.json
+          if-no-files-found: ignore
+
+  # Job 4: Поиск мертвого кода (Periphery)
+  dead-code-check:
+    name: 🗑️ Поиск неиспользуемого кода
+    needs: setup-tools
+    runs-on: macos-latest
+
+    steps:
+      - name: 📥 Checkout кода
+        uses: actions/checkout@v4
+
+      - name: 📥 Загрузка инструментов
+        uses: actions/download-artifact@v4
+        with:
+          name: code-review-tools
+          path: tools
+
+      - name: 🔧 Установка Periphery
+        run: |
+          brew install peripheryapp/periphery/periphery
+          echo "Periphery версия: $(periphery version)"
+
+      - name: 🗑️ Запуск поиска мертвого кода
+        id: dead-code
+        continue-on-error: true
+        run: |
+          chmod +x tools/swift-dead-code
+
+          # Ищем проект
+          if ls *.xcworkspace 1> /dev/null 2>&1; then
+            PROJECT=$(ls *.xcworkspace | head -n 1)
+          elif ls *.xcodeproj 1> /dev/null 2>&1; then
+            PROJECT=$(ls *.xcodeproj | head -n 1)
+          else
+            echo "⚠️ Xcode проект не найден, пропускаем проверку"
+            exit 0
+          fi
+
+          tools/swift-dead-code "$PROJECT" --format json --output dead-code-report.json || true
+
+      - name: 📊 Результаты поиска мертвого кода
+        if: always()
+        run: |
+          if [ -f "dead-code-report.json" ]; then
+            echo "📄 Отчет создан"
+            cat dead-code-report.json | jq '.summary'
+
+            DEAD_CODE_COUNT=$(cat dead-code-report.json | jq '.summary.warnings')
+            echo "🗑️ Неиспользуемых элементов: $DEAD_CODE_COUNT"
+            echo "DEAD_CODE_COUNT=$DEAD_CODE_COUNT" >> $GITHUB_ENV
+          else
+            echo "⚠️ Отчет не создан или проект не поддерживается"
+          fi
+
+      - name: 💾 Сохранение отчета
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dead-code-report
+          path: dead-code-report.json
+          if-no-files-found: ignore
+
+  # Job 5: Проверка утечек памяти
+  memory-check:
+    name: 💾 Проверка утечек памяти
+    needs: setup-tools
+    runs-on: macos-latest
+
+    steps:
+      - name: 📥 Checkout кода
+        uses: actions/checkout@v4
+
+      - name: 📥 Загрузка инструментов
+        uses: actions/download-artifact@v4
+        with:
+          name: code-review-tools
+          path: tools
+
+      - name: 💾 Запуск проверки памяти
+        id: memory-check
+        continue-on-error: true
+        run: |
+          chmod +x tools/swift-memory-check
+          tools/swift-memory-check . --static-analysis --format json --output memory-report.json || true
+
+      - name: 📊 Результаты проверки памяти
+        if: always()
+        run: |
+          if [ -f "memory-report.json" ]; then
+            echo "📄 Отчет создан"
+            cat memory-report.json | jq '.summary'
+
+            MEMORY_ERRORS=$(cat memory-report.json | jq '.summary.errors')
+            MEMORY_WARNINGS=$(cat memory-report.json | jq '.summary.warnings')
+
+            echo "❌ Ошибок: $MEMORY_ERRORS"
+            echo "⚠️  Предупреждений: $MEMORY_WARNINGS"
+
+            echo "MEMORY_ERRORS=$MEMORY_ERRORS" >> $GITHUB_ENV
+            echo "MEMORY_WARNINGS=$MEMORY_WARNINGS" >> $GITHUB_ENV
+          else
+            echo "⚠️ Отчет не создан"
+          fi
+
+      - name: 💾 Сохранение отчета
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-report
+          path: memory-report.json
+          if-no-files-found: ignore
+
+  # Job 6: Сводный отчет и отправка на backend
+  final-report:
+    name: 📊 Сводный отчет
+    needs: [build-check, style-check, dead-code-check, memory-check]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: 📥 Checkout кода
+        uses: actions/checkout@v4
+
+      - name: 📥 Загрузка всех отчетов
+        uses: actions/download-artifact@v4
+        with:
+          path: reports
+
+      - name: 📊 Создание сводного отчета
+        run: |
+          echo "╔════════════════════════════════════════════════════════╗"
+          echo "║          📊 СВОДНЫЙ ОТЧЕТ CODE REVIEW                  ║"
+          echo "╚════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "📌 Репозиторий: ${{ github.repository }}"
+          echo "🔀 Ветка: ${{ github.ref_name }}"
+          echo "👤 Автор: ${{ github.actor }}"
+          echo "📝 Commit: ${{ github.sha }}"
+          echo ""
+
+          # Статус сборки
+          if [ "${{ needs.build-check.outputs.build-status }}" == "success" ]; then
+            echo "✅ 🔨 Сборка: УСПЕШНО"
+          else
+            echo "❌ 🔨 Сборка: ПРОВАЛЕНА"
+          fi
+
+          # Проверка стиля
+          if [ -f "reports/style-report/style-report.json" ]; then
+            STYLE_ERRORS=$(cat reports/style-report/style-report.json | jq -r '.summary.errors // 0')
+            STYLE_WARNINGS=$(cat reports/style-report/style-report.json | jq -r '.summary.warnings // 0')
+            echo "🎨 Стиль кода: $STYLE_ERRORS ошибок, $STYLE_WARNINGS предупреждений"
+          else
+            echo "⚠️  🎨 Стиль кода: отчет недоступен"
+          fi
+
+          # Мертвый код
+          if [ -f "reports/dead-code-report/dead-code-report.json" ]; then
+            DEAD_CODE=$(cat reports/dead-code-report/dead-code-report.json | jq -r '.summary.warnings // 0')
+            echo "🗑️  Неиспользуемый код: $DEAD_CODE элементов"
+          else
+            echo "⚠️  🗑️  Неиспользуемый код: отчет недоступен"
+          fi
+
+          # Утечки памяти
+          if [ -f "reports/memory-report/memory-report.json" ]; then
+            MEM_ERRORS=$(cat reports/memory-report/memory-report.json | jq -r '.summary.errors // 0')
+            MEM_WARNINGS=$(cat reports/memory-report/memory-report.json | jq -r '.summary.warnings // 0')
+            echo "💾 Утечки памяти: $MEM_ERRORS ошибок, $MEM_WARNINGS предупреждений"
+          else
+            echo "⚠️  💾 Утечки памяти: отчет недоступен"
+          fi
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: 📤 Подготовка JSON для отправки на backend
+        id: prepare-json
+        run: |
+          # Создаем JSON со всеми результатами
+          cat > final-report.json <<EOF
+          {
+            "repository": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "author": "${{ github.actor }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "build_status": "${{ needs.build-check.outputs.build-status }}",
+            "reports": {
+              "style": $(cat reports/style-report/style-report.json 2>/dev/null || echo 'null'),
+              "dead_code": $(cat reports/dead-code-report/dead-code-report.json 2>/dev/null || echo 'null'),
+              "memory": $(cat reports/memory-report/memory-report.json 2>/dev/null || echo 'null')
+            }
+          }
+          EOF
+
+          echo "📄 JSON отчет создан:"
+          cat final-report.json | jq '.'
+
+      - name: 📤 Отправка на backend (TODO)
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📤 ОТПРАВКА НА BACKEND"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "⚠️  Backend URL не настроен"
+          echo ""
+          echo "💡 Чтобы отправлять результаты на ваш backend:"
+          echo "   1. Добавьте secret BACKEND_URL в настройках репозитория"
+          echo "   2. Раскомментируйте код ниже"
+          echo ""
+          echo "Пример кода для отправки:"
+          echo "  curl -X POST \$BACKEND_URL \\"
+          echo "    -H 'Content-Type: application/json' \\"
+          echo "    -d @final-report.json"
+          echo ""
+
+          # TODO: Раскомментируйте когда backend будет готов
+          # if [ -n "${{ secrets.BACKEND_URL }}" ]; then
+          #   curl -X POST ${{ secrets.BACKEND_URL }} \
+          #     -H "Content-Type: application/json" \
+          #     -H "Authorization: Bearer ${{ secrets.BACKEND_TOKEN }}" \
+          #     -d @final-report.json
+          # fi
+
+      - name: 💾 Сохранение финального отчета
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-report
+          path: final-report.json

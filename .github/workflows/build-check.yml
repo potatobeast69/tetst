@@ -1,0 +1,122 @@
+name: 🔨 Build Check
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - '**.swift'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - '**.xcodeproj/**'
+      - '**.xcworkspace/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - '**.swift'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - '**.xcodeproj/**'
+      - '**.xcworkspace/**'
+  workflow_dispatch:
+
+jobs:
+  check-swift-project:
+    name: Проверка типа проекта
+    runs-on: ubuntu-latest
+    outputs:
+      is-swift: ${{ steps.detect.outputs.is-swift }}
+    steps:
+      - name: 📥 Checkout репозитория
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Определение типа проекта
+        id: detect
+        run: |
+          if [ -f "Package.swift" ] || [ -n "$(find . -name '*.swift' -type f | head -n 1)" ]; then
+            echo "✅ Swift проект обнаружен"
+            echo "is-swift=true" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️  Swift файлы не найдены - пропускаем проверку компиляции"
+            echo "is-swift=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-check:
+    name: Проверка компиляции
+    needs: check-swift-project
+    if: needs.check-swift-project.outputs.is-swift == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    
+    steps:
+      - name: 📥 Checkout репозитория
+        uses: actions/checkout@v4
+      
+      - name: 💾 Кеширование SPM зависимостей
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      
+      - name: 📋 Информация о среде
+        run: |
+          echo "Xcode версия:"
+          xcodebuild -version
+          echo ""
+          echo "Swift версия:"
+          swift --version
+          echo ""
+          echo "macOS версия:"
+          sw_vers
+
+      - name: 🔨 Сборка проекта
+        run: |
+          if [ -f "Package.swift" ]; then
+            echo "📦 Найден Swift Package"
+            swift build
+          
+          elif ls *.xcworkspace >/dev/null 2>&1; then
+            WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+            echo "🔨 Найден workspace: $WORKSPACE"
+            
+            SCHEME=$(xcodebuild -workspace "$WORKSPACE" -list | grep -A 1 "Schemes:" | tail -n 1 | xargs)
+            echo "📋 Схема: $SCHEME"
+            
+            xcodebuild \
+              -workspace "$WORKSPACE" \
+              -scheme "$SCHEME" \
+              -destination "platform=iOS Simulator,name=iPhone 16" \
+              -configuration Debug \
+              clean build
+          
+          elif ls *.xcodeproj >/dev/null 2>&1; then
+            PROJECT=$(ls -d *.xcodeproj | head -n 1)
+            echo "🔨 Найден проект: $PROJECT"
+            
+            SCHEME=$(xcodebuild -project "$PROJECT" -list | grep -A 1 "Schemes:" | tail -n 1 | xargs)
+            echo "📋 Схема: $SCHEME"
+            
+            xcodebuild \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -destination "platform=iOS Simulator,name=iPhone 16" \
+              -configuration Debug \
+              clean build
+          else
+            echo "❌ Не найден Package.swift, .xcworkspace или .xcodeproj"
+            exit 1
+          fi
+
+      - name: ✅ Сборка успешна
+        if: success()
+        run: echo "✅ Проект успешно собран!"
+
+      - name: ❌ Сборка провалилась
+        if: failure()
+        run: |
+          echo "❌ Проект не компилируется!"
+          echo "Проверьте ошибки выше ☝️"
+          exit 1

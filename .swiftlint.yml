@@ -1,0 +1,146 @@
+# SwiftLint Configuration для Swift Style Check
+# Этот файл можно использовать с --config флагом
+
+# Включенные правила (помимо стандартных)
+opt_in_rules:
+  - array_init
+  - attributes
+  - closure_end_indentation
+  - closure_spacing
+  - collection_alignment
+  - contains_over_first_not_nil
+  - empty_count
+  - empty_string
+  - explicit_init
+  - extension_access_modifier
+  - fallthrough
+  - fatal_error_message
+  - file_header
+  - first_where
+  - implicit_return
+  - joined_default_parameter
+  - last_where
+  - literal_expression_end_indentation
+  - modifier_order
+  - multiline_arguments
+  - multiline_function_chains
+  - multiline_literal_brackets
+  - multiline_parameters
+  - operator_usage_whitespace
+  - overridden_super_call
+  - pattern_matching_keywords
+  - prefer_self_type_over_type_of_self
+  - redundant_nil_coalescing
+  - redundant_type_annotation
+  - sorted_first_last
+  - toggle_bool
+  - trailing_closure
+  - unneeded_parentheses_in_closure_argument
+  - vertical_parameter_alignment_on_call
+  - yoda_condition
+
+# Отключенные правила
+disabled_rules:
+  - todo # TODO комментарии будут проверяться в quality analyzer
+  - force_cast # Иногда оправдано в тестах
+  - trailing_whitespace # Может быть раздражающим
+
+# Пути для исключения
+excluded:
+  - Pods
+  - .build
+  - DerivedData
+  - .swiftpm
+  - Tests/LinuxMain.swift
+
+# Параметры правил
+
+line_length:
+  warning: 120
+  error: 200
+  ignores_function_declarations: true
+  ignores_comments: true
+  ignores_urls: true
+
+file_length:
+  warning: 400
+  error: 600
+  ignore_comment_only_lines: true
+
+function_body_length:
+  warning: 50
+  error: 100
+
+type_body_length:
+  warning: 300
+  error: 500
+
+cyclomatic_complexity:
+  warning: 10
+  error: 20
+
+nesting:
+  type_level:
+    warning: 2
+  statement_level:
+    warning: 5
+
+identifier_name:
+  min_length:
+    warning: 2
+    error: 1
+  max_length:
+    warning: 40
+    error: 50
+  excluded:
+    - id
+    - URL
+    - url
+    - i
+    - x
+    - y
+    - z
+
+type_name:
+  min_length:
+    warning: 3
+    error: 1
+  max_length:
+    warning: 40
+    error: 50
+
+large_tuple:
+  warning: 3
+  error: 4
+
+function_parameter_count:
+  warning: 5
+  error: 8
+
+# Кастомные правила
+custom_rules:
+  # Запрет force unwrap кроме тестов
+  no_force_unwrap:
+    name: "Force Unwrap"
+    regex: '(\w+)!'
+    match_kinds: 
+      - identifier
+    message: "Избегайте force unwrap. Используйте optional binding или guard"
+    severity: warning
+  
+  # Требование использования self только для разрешения неоднозначности
+  explicit_self:
+    name: "Explicit Self"
+    regex: '\bself\.\w+'
+    message: "Используйте self только когда необходимо"
+    severity: warning
+    
+  # Проверка на использование print в production коде
+  no_print:
+    name: "No Print Statements"
+    regex: 'print\('
+    message: "Используйте Logger вместо print в production коде"
+    severity: warning
+
+# Настройки репортера
+reporter: "emoji" # или "json", "html", "xcode"

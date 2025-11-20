@@ -1,0 +1,143 @@
+name: Build Swift Tools
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    name: Build on macOS
+    runs-on: macos-14
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Show Swift version
+      run: swift --version
+          
+    - name: Resolve dependencies
+      run: swift package resolve
+    
+    - name: Build Release
+      run: swift build -c release
+    
+    - name: List built binaries
+      run: |
+        echo "📦 Built binaries:"
+        ls -lh .build/release/
+        file .build/release/swift-* 2>/dev/null || true
+    
+    - name: Test binaries
+      run: |
+        echo "🧪 Testing binaries..."
+        .build/release/swift-style-check --help || echo "swift-style-check failed"
+        .build/release/swift-dead-code --help || echo "swift-dead-code failed"
+        .build/release/swift-memory-check --help || echo "swift-memory-check failed"
+    
+    - name: Create artifacts directory
+      run: |
+        mkdir -p artifacts/macos
+        cp .build/release/swift-style-check artifacts/macos/ 2>/dev/null || echo "swift-style-check not found"
+        cp .build/release/swift-dead-code artifacts/macos/ 2>/dev/null || echo "swift-dead-code not found"
+        cp .build/release/swift-memory-check artifacts/macos/ 2>/dev/null || echo "swift-memory-check not found"
+        chmod +x artifacts/macos/* 2>/dev/null || true
+        ls -lah artifacts/macos/
+    
+    - name: Tar artifacts
+      run: |
+        cd artifacts
+        tar -czf ../swiftcodereview-macos.tar.gz macos/
+        cd ..
+        ls -lh swiftcodereview-macos.tar.gz
+    
+    - name: Upload macOS binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: swiftcodereview-macos
+        path: swiftcodereview-macos.tar.gz
+        retention-days: 30
+
+  build-linux:
+    name: Build on Linux
+    runs-on: ubuntu-24.04
+    container:
+      image: swift:5.9
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+        
+    - name: Show Swift version
+      run: swift --version
+          
+    - name: Resolve dependencies
+      run: swift package resolve
+    
+    - name: Build swift-style-check
+      run: |
+        echo "🔨 Building swift-style-check..."
+        swift build -c release --product swift-style-check
+    
+    - name: Build swift-memory-check
+      run: |
+        echo "🔨 Building swift-memory-check..."
+        swift build -c release --product swift-memory-check
+    
+    - name: List built binaries
+      run: |
+        echo "📦 Built binaries:"
+        ls -lh .build/release/
+        file .build/release/swift-style-check 2>/dev/null || echo "swift-style-check not found"
+        file .build/release/swift-memory-check 2>/dev/null || echo "swift-memory-check not found"
+    
+    - name: Test binaries
+      run: |
+        echo "🧪 Testing binaries..."
+        .build/release/swift-style-check --help || echo "Failed"
+        .build/release/swift-memory-check --help || echo "Failed"
+    
+    - name: Create artifacts directory
+      run: |
+        mkdir -p artifacts/linux
+        cp .build/release/swift-style-check artifacts/linux/ 2>/dev/null || echo "swift-style-check not found"
+        cp .build/release/swift-memory-check artifacts/linux/ 2>/dev/null || echo "swift-memory-check not found"
+        chmod +x artifacts/linux/* 2>/dev/null || true
+        ls -lah artifacts/linux/
+    
+    - name: Tar artifacts
+      run: |
+        cd artifacts
+        tar -czf ../swiftcodereview-linux.tar.gz linux/
+        cd ..
+        ls -lh swiftcodereview-linux.tar.gz
+    
+    - name: Upload Linux binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: swiftcodereview-linux
+        path: swiftcodereview-linux.tar.gz
+        retention-days: 30
+
+  summary:
+    name: Build Summary
+    needs: [build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Show build status
+      run: |
+        echo "## 🎉 Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| macOS    | ${{ needs.build-macos.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Linux    | ${{ needs.build-linux.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "- **macOS**: swift-style-check, swift-dead-code, swift-memory-check" >> $GITHUB_STEP_SUMMARY
+        echo "- **Linux**: swift-style-check, swift-memory-check" >> $GITHUB_STEP_SUMMARY
